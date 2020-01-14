@@ -1,0 +1,97 @@
+﻿// Each #kernel tells which function to compile; you can have many kernels
+#pragma kernel voxelCuller
+
+struct VoxelData
+{
+	uint3 _Position;
+	uint _FaceFlag;
+};
+
+//ipnut and output position buffers
+RWStructuredBuffer<uint3> _VoxelPositions; //INPUT
+RWStructuredBuffer<uint> _FaceFlags; //INPUT
+AppendStructuredBuffer<VoxelData> _VoxelsInFrustum; //OUTPUT
+
+//arguments for the instancedDrawCall
+RWStructuredBuffer<int> _Args; //OUTPUT
+
+//Vectors making bounds for the frustum
+StructuredBuffer<float3> _UnitFrustumVectors; //INPUT
+
+//camera info
+float3 _CamPos;
+float _FarClipDistance;
+float _NearClipDistance;
+
+//info for the threads
+int _VoxelAmount;
+int _ThreadAmount;
+
+uint GetVertexIndex(uint x, uint y, uint z)
+{
+	return z * _ThreadAmount * _ThreadAmount + y * _ThreadAmount + x;
+}
+
+[numthreads(1, 1, 1)]
+void voxelCuller(uint3 id : SV_DispatchThreadID)
+{
+	//get the index and don't loop over the amount required
+	uint idx = GetVertexIndex(id.x, id.y, id.z);
+
+	//set the argumentbuffer once
+	if (idx == 0)
+	{
+		_Args[0] = 1; //1 point per instance of the shader
+		_Args[1] = 1; //amount of vertices to draw
+		_Args[2] = 0;
+		_Args[3] = 0;
+	}
+
+	if (idx > _VoxelAmount) return;
+
+	//Get the 8 bounding points for the frustum
+	float3 p1;
+	float3 p2;
+	float3 p3;
+	float3 p4;
+	float3 p5;
+	float3 p6;
+	float3 p7;
+	float3 p8;
+	p1 = _CamPos + (_UnitFrustumVectors[0] * _NearClipDistance); //set the position of all the corners
+	p2 = _CamPos + (_UnitFrustumVectors[1] * _NearClipDistance);
+	p3 = _CamPos + (_UnitFrustumVectors[2] * _NearClipDistance);
+	p4 = _CamPos + (_UnitFrustumVectors[3] * _NearClipDistance);
+	p5 = _CamPos + (_UnitFrustumVectors[0] * _FarClipDistance);
+	p6 = _CamPos + (_UnitFrustumVectors[1] * _FarClipDistance);
+	p7 = _CamPos + (_UnitFrustumVectors[2] * _FarClipDistance);
+	p8 = _CamPos + (_UnitFrustumVectors[3] * _FarClipDistance);
+
+	//get the required vectors for testing
+	float3 u = normalize(cross(p5 - p1, p4 - p1));
+	float3 v = normalize(cross(p2 - p1, p5 - p1));
+	float3 w = normalize(cross(p4 - p1, p2 - p1));
+
+	float3 i = normalize(cross(p3 - p7, p4 - p7));
+	//float3 j = normalize(cross(p8 - p7, p5 - p7));  //farrplane normal, wont render anyway when behind this
+	float3 k = normalize(cross(p6 - p7, p2 - p7));
+
+	float3 x = normalize(_VoxelPositions[idx] - _CamPos);
+
+	bool test1 = 0 < dot(u, x) && dot(u, x) < dot(u, u);
+	bool test2 = 0 < dot(v, x) && dot(v, x) < dot(v, v);
+	bool test3 = 0 < dot(w, x) && dot(w, x) < dot(w, w);
+
+	bool test4 = 0 < dot(i, x) && dot(i, x) < dot(i, i);
+	//bool test5 = 0 < dot(j, x) && dot(j, x) < dot(j, j);
+	bool test6 = 0 < dot(k, x) && dot(k, x) < dot(k, k);
+
+	//id voxel pos is inside camera frustum, push it to buffer
+	if (test1 && test2 && test3 && test4 && test6)
+	{
+		VoxelData vd;
+		vd._Position = _VoxelPositions[idx];
+		vd._FaceFlag = _FaceFlags[idx];
+		_VoxelsInFrustum.Append(vd);
+	}
+}
